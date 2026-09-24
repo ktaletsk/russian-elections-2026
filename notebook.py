@@ -7,27 +7,17 @@ app = marimo.App(width="medium", auto_download=["html"])
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    # Выборы в Госдуму-2026: воспроизведение анализа «Медузы» по сырым данным
+    # Выборы в Госдуму-2026: что говорят протоколы участков
 
-    Воспроизводим выкладки статьи [«Выборы в Госдуму-2026 — самые грязные парламентские выборы эпохи Путина»](https://meduza.io/feature/2026/09/24/vybory-v-gosdumu-2026-samye-gryaznye-parlamentskie-vybory-epohi-putina)
-    («Медуза», 24.09.2026) **с нуля — по протоколам участковых избирательных комиссий (УИК)**, а не по картинкам из статьи.
+    Отчёт о голосовании по партийным спискам на выборах в Государственную думу 18–20 сентября 2026 года,
+    построенный по протоколам участковых избирательных комиссий (УИК).
 
-    **Источники данных**
+    Сначала — итоги: партии, явка, электронное голосование, регионы. Затем — то, чего в официальных
+    итогах не видно: как голоса распределены по участкам и какие статистические аномалии есть в этом
+    распределении по сравнению со всеми федеральными выборами начиная с 2000 года.
 
-    | Выборы | Что это | Откуда |
-    |---|---|---|
-    | 2000–2021 | протоколы УИК всех федеральных выборов, собранные с izbirkom.ru Сергеем Шпилькиным | [github.com/dkobak/elections/data](https://github.com/dkobak/elections/tree/master/data) |
-    | 2024 | протоколы УИК президентских выборов (сбор — Иван Шукшин) | там же |
-    | 2026 | протоколы УИК (федеральный список), снимок публичных сводных таблиц ЦИК; значения протоколов не меняются | [neshodilina.netlify.app/api](https://neshodilina.netlify.app/api) (CDN `pub-9b41…r2.dev`) |
-
-    **Методика** — та же, что использует «Медуза»: диаграммы «явка × результат» по УИКам и тест на
-    «красивые» целые проценты [Кобака, Шпилькина и Пшеничникова](https://rss.onlinelibrary.wiley.com/doi/full/10.1111/j.1740-9713.2018.01141.x)
-    (*Significance*, 2018) с Монте-Карло-оценкой ожидаемого числа случайных пиков.
-    Эталонная реализация — [`dkobak/elections`](https://github.com/dkobak/elections).
-
-    > ⚠️ Данные 2026 года предварительные: ЦИК опубликовал не все протоколы
-    > (нет Ленинградской области и оккупированных территорий). «Медуза» строила графики по 82 124 УИКам,
-    > к моменту публикации их стало 88 113; здесь используется тот снимок, который скачан ниже.
+    > ⚠️ Данные 2026 года предварительные: на момент снимка ЦИК опубликовал протоколы не всех участков
+    > (нет Ленинградской области и оккупированных территорий).
     """)
     return
 
@@ -46,7 +36,7 @@ def imports():
     import pandas as pd
     import requests
 
-    return Path, io, json, mo, np, pd, plt, requests
+    return Path, json, mo, np, pd, plt, requests
 
 
 @app.cell
@@ -171,8 +161,8 @@ def refresh_button(mo):
 
 @app.cell
 def elections(ALL_YEARS, load_2026, load_historical, pd, refresh_2026):
-    def _is_deg(df, year):
-        """Псевдо-УИКи дистанционного электронного голосования (в данных 2021 года)."""
+    def is_deg_pseudo(df, year):
+        """Псевдо-УИКи дистанционного электронного голосования (есть в данных 2021 года)."""
         deg = df["tik"].astype(str).str.contains("Дистанционное электронное")
         if year == 2021:
             num = pd.to_numeric(df["uik"].astype(str).str.extract(r"(\d+)")[0], errors="coerce")
@@ -181,7 +171,7 @@ def elections(ALL_YEARS, load_2026, load_historical, pd, refresh_2026):
 
 
     def _prepare(df, year):
-        df = df.assign(year=year, deg=_is_deg(df, year))
+        df = df.assign(year=year, deg=is_deg_pseudo(df, year))
         df = df[~df["deg"] & (df["voters"] > 0)].copy()
         df["turnout"] = 100 * df["given"] / df["voters"]
         df["result"] = 100 * df["leader"] / df["received"].where(df["received"] > 0)
@@ -191,7 +181,7 @@ def elections(ALL_YEARS, load_2026, load_historical, pd, refresh_2026):
     table_2026, meta_2026 = load_2026(refresh=refresh_2026.value)
     elections = {y: _prepare(load_historical(y), y) for y in ALL_YEARS if y < 2026}
     elections[2026] = _prepare(table_2026, 2026)
-    return elections, meta_2026
+    return elections, is_deg_pseudo, meta_2026, table_2026
 
 
 @app.cell(hide_code=True)
@@ -200,37 +190,24 @@ def data_md(elections, meta_2026, mo):
         f"""
     ## Данные
 
-    Снимок 2026 года: **{meta_2026["generated_at"]}**, УИКов с протоколом федерального списка — **{len(elections[2026]):,}**
-    из {meta_2026["stats"]["total_uiks"]:,}. Для сравнимости везде используются только «бумажные» участки:
-    псевдо-УИКи дистанционного электронного голосования (ДЭГ) из данных 2021 года исключены,
-    а в 2026 году ЦИК публикует ДЭГ только по округам, не по участкам.
+    | Выборы | Что это | Откуда |
+    |---|---|---|
+    | 2000–2021 | протоколы УИК всех федеральных выборов, собранные с izbirkom.ru Сергеем Шпилькиным | [github.com/dkobak/elections](https://github.com/dkobak/elections/tree/master/data) |
+    | 2024 | протоколы УИК президентских выборов (сбор — Иван Шукшин) | там же |
+    | 2026 | протоколы УИК из публичных сводных таблиц ЦИК | [neshodilina.netlify.app/api](https://neshodilina.netlify.app/api) |
+
+    Снимок 2026 года: **{meta_2026["generated_at"].replace("T", " ")}**, УИКов с протоколом федерального списка —
+    **{len(elections[2026]):,}** из {meta_2026["stats"]["total_uiks"]:,}. Итоги ДЭГ (дистанционного электронного
+    голосования) ЦИК публикует не по участкам, а по одномандатным округам, поэтому в анализе участков
+    используются только «бумажные» УИКи — и в 2026, и в прошлые годы.
     """.replace(",", " ")
     )
     return
 
 
 @app.cell
-def summary(LEADER_NAME, PRESIDENTIAL, elections, pd):
-    def _row(y, d):
-        return {
-            "Год": y,
-            "Выборы": "президент" if y in PRESIDENTIAL else "Госдума",
-            "Лидер": LEADER_NAME.get(y, "Единая Россия"),
-            "УИКов": len(d),
-            "Избирателей": int(d["voters"].sum()),
-            "Явка, %": round(100 * d["given"].sum() / d["voters"].sum(), 2),
-            "Результат лидера, %": round(100 * d["leader"].sum() / d["received"].sum(), 2),
-        }
-
-
-    summary_table = pd.DataFrame([_row(y, d) for y, d in elections.items()])
-    summary_table
-    return (summary_table,)
-
-
-@app.cell
 def plot_helpers(np, plt):
-    BG = "#F0EEE6"  # фон графиков «Медузы»
+    BG = "#F0EEE6"  # тёплый бумажный фон графиков
     C_OLD, C_NEW = "#555555", "#B8995E"
     plt.rcParams.update({
         "figure.facecolor": BG, "axes.facecolor": BG, "savefig.facecolor": BG,
@@ -269,10 +246,376 @@ def plot_helpers(np, plt):
     return C_NEW, C_OLD, comet_axes, jittered
 
 
+@app.cell
+def results(
+    DATA_DIR,
+    is_deg_pseudo,
+    load_historical,
+    meta_2026,
+    np,
+    pd,
+    table_2026,
+):
+    PARTY_SHORT = [  # подстрока официального названия → короткое имя (порядок важен)
+        ("ЕДИНАЯ РОССИЯ", "Единая Россия"),
+        ("КОММУНИСТЫ РОССИИ", "Коммунисты России"),
+        ("КОММУНИСТИЧЕСКАЯ ПАРТИЯ РОССИЙСКОЙ ФЕДЕРАЦИИ", "КПРФ"),
+        ("ЛДПР", "ЛДПР"),
+        ("НОВЫЕ ЛЮДИ", "Новые люди"),
+        ("СПРАВЕДЛИВАЯ РОССИЯ", "Справедливая Россия"),
+        ("ПЕНСИОНЕРОВ", "Партия пенсионеров"),
+        ("ЗЕЛЁНЫЕ", "Зелёные"),
+        ("ЗЕЛЕНАЯ АЛЬТЕРНАТИВА", "Зелёная альтернатива"),
+        ("РОДИНА", "Родина"),
+        ("ЯБЛОКО", "Яблоко"),
+        ("ПАРТИЯ РОСТА", "Партия Роста"),
+        ("СВОБОДЫ И СПРАВЕДЛИВОСТИ", "Партия свободы и справедливости"),
+        ("Гражданская Платформа", "Гражданская платформа"),
+        ("Партия прямой демократии", "Партия прямой демократии"),
+    ]
+    INVALID, VALID = "Число недействительных избирательных бюллетеней", "Число действительных избирательных бюллетеней"
+
+
+    def short_party(name):
+        return next(short for key, short in PARTY_SHORT if key in name)
+
+
+    def party_results(year):
+        """Голоса за партии на участках, в ДЭГ и всего.
+
+        Проценты — от всех бюллетеней в ящиках (действительные + недействительные), как считает ЦИК.
+        """
+        if year == 2021:
+            raw = pd.read_csv(DATA_DIR / "2021.csv.zip")
+            cols = [c for c in raw.columns if c.split(".")[0].isdigit()]
+            deg = is_deg_pseudo(raw, 2021)
+            paper, online = raw.loc[~deg, cols].sum(), raw.loc[deg, cols].sum()
+            ballots_paper = raw.loc[~deg, [INVALID, VALID]].to_numpy().sum()
+            ballots_deg = raw.loc[deg, [INVALID, VALID]].to_numpy().sum()
+        else:
+            raw = pd.read_parquet(DATA_DIR / "2026_federal.parquet")
+            regions = meta_2026["regions"]["regions"]
+            parties = meta_2026["regions"]["parties"]
+            paper = raw[parties].sum()
+            online = pd.Series(np.sum([r["deg"]["f"] for r in regions], axis=0), index=parties)
+            ballots_paper = (raw["line9"] + raw["line10"]).sum()
+            ballots_deg = sum(r["deg"]["fp"][8] + r["deg"]["fp"][9] for r in regions)
+        df = pd.DataFrame({"Партия": [short_party(c) for c in paper.index],
+                           "На участках": paper.to_numpy(), "ДЭГ": online.to_numpy()})
+        df["Всего"] = df["На участках"] + df["ДЭГ"]
+        df["%"] = (100 * df["Всего"] / (ballots_paper + ballots_deg)).round(2)
+        df["% на участках"] = (100 * df["На участках"] / ballots_paper).round(2)
+        df["% в ДЭГ"] = (100 * df["ДЭГ"] / ballots_deg).round(2)
+        return df.sort_values("Всего", ascending=False, ignore_index=True)
+
+
+    def turnout_totals(year):
+        """Явка с учётом ДЭГ и доля ДЭГ среди выданных бюллетеней."""
+        if year == 2021:
+            raw = load_historical(2021)
+            deg = is_deg_pseudo(raw, 2021)
+            voters, given, given_deg = raw["voters"].sum(), raw["given"].sum(), raw.loc[deg, "given"].sum()
+        else:
+            regions = meta_2026["regions"]["regions"]
+            voters = table_2026["voters"].sum() + sum(r["deg"]["fp"][0] for r in regions)
+            given_deg = sum(r["deg"]["fp"][3] for r in regions)
+            given = table_2026["given"].sum() + given_deg
+        return {"явка": 100 * given / voters, "доля ДЭГ": 100 * given_deg / given, "избирателей": voters}
+
+
+    parties = {y: party_results(y) for y in (2021, 2026)}
+    turnout = {y: turnout_totals(y) for y in (2021, 2026)}
+    return parties, turnout
+
+
+@app.cell(hide_code=True)
+def headline(elections, mo, parties, turnout):
+    def _stat(label, v26, v21):
+        d = v26 - v21
+        return mo.stat(value=f"{v26:.1f}%", label=label, caption=f"{d:+.1f} п.п. к 2021",
+                       direction="increase" if d > 0 else "decrease", bordered=True)
+
+
+    _p26, _p21 = (parties[y].set_index("Партия")["%"] for y in (2026, 2021))
+    mo.vstack([
+        mo.md("## Главное"),
+        mo.hstack(
+            [_stat("Явка", turnout[2026]["явка"], turnout[2021]["явка"])]
+            + [_stat(p, _p26[p], _p21[p]) for p in ["Единая Россия", "КПРФ", "ЛДПР", "Новые люди", "Справедливая Россия"]],
+            wrap=True, justify="start",
+        ),
+        mo.md(f"""Предварительные итоги по {len(elections[2026]):,} участкам и ДЭГ. Электронно проголосовали
+    **{turnout[2026]["доля ДЭГ"]:.1f}%** избирателей, пришедших на выборы (в 2021 году — {turnout[2021]["доля ДЭГ"]:.1f}%).""".replace(",", " ")),
+    ])
+    return
+
+
+@app.cell(hide_code=True)
+def parties_md(mo):
+    mo.md(r"""
+    ## 1. Итоги по партиям
+
+    Результаты голосования по федеральному списку с учётом ДЭГ. Пунктир — пятипроцентный барьер,
+    который нужно преодолеть, чтобы получить места по партийным спискам.
+    """)
+    return
+
+
+@app.cell
+def fig_parties(C_NEW, C_OLD, mo, np, parties, plt):
+    def _fig_parties():
+        t = parties[2026][["Партия", "%"]].merge(parties[2021][["Партия", "%"]], on="Партия", how="outer",
+                                               suffixes=(" 2026", " 2021")).fillna(0)
+        t = t[t[["% 2026", "% 2021"]].max(axis=1) >= 0.5].sort_values("% 2026")
+        y = np.arange(len(t))
+        fig, ax = plt.subplots(figsize=(11, 0.5 * len(t) + 1.2), layout="constrained")
+        ax.barh(y + 0.2, t["% 2021"], height=0.38, color=C_OLD, label="2021")
+        ax.barh(y - 0.2, t["% 2026"], height=0.38, color=C_NEW, label="2026")
+        for yi, v in zip(y, t["% 2026"]):
+            ax.text(v + 0.5, yi - 0.2, f"{v:.1f}%" if v > 0 else "не участвовала", va="center", fontsize=9,
+                    fontweight="bold" if v > 0 else "normal", color="k" if v > 0 else "#888888")
+        for yi, v in zip(y, t["% 2021"]):
+            if v > 0:
+                ax.text(v + 0.5, yi + 0.2, f"{v:.1f}%", va="center", fontsize=8, color=C_OLD)
+        ax.axvline(5, color="#999999", ls="--", lw=1)
+        ax.set_yticks(y, t["Партия"])
+        ax.set_xlabel("% от бюллетеней в ящиках")
+        ax.legend(frameon=False, loc="lower right")
+        ax.set_title("Результаты партий, 2021 и 2026", loc="left", fontweight="bold", fontsize=13)
+        return fig
+
+
+    mo.vstack([
+        _fig_parties(),
+        mo.accordion({"Таблица: голоса на участках и в ДЭГ, 2026": mo.ui.table(parties[2026], selection=None)}),
+    ])
+    return
+
+
+@app.cell(hide_code=True)
+def deg_md(deg_table, mo, turnout):
+    mo.md(
+        f"""
+    ## 2. Явка и электронное голосование
+
+    Явка с учётом ДЭГ — **{turnout[2026]["явка"]:.1f}%** (в 2021 году — {turnout[2021]["явка"]:.1f}%).
+    ДЭГ проводилось в **{len(deg_table)}** регионах; в Москве электронно проголосовали
+    **{deg_table.set_index("Регион").loc["город Москва", "Доля ДЭГ, %"]}%** избирателей, в остальных регионах — от
+    {deg_table["Доля ДЭГ, %"].min()}% до {deg_table.query("Регион != 'город Москва'")["Доля ДЭГ, %"].max()}%.
+
+    Справа — результат «Единой России» на участках и в ДЭГ того же региона. ЦИК публикует итоги ДЭГ
+    по одномандатным округам, где электронное голосование было разрешено, так что это сравнение
+    по региону в целом, а не по одним и тем же избирателям.
+    """
+    )
+    return
+
+
+@app.cell
+def deg_tables(meta_2026, pd):
+    ER_INDEX = next(i for i, p in enumerate(meta_2026["regions"]["parties"]) if "ЕДИНАЯ РОССИЯ" in p)
+
+    _rows = []
+    for _r in meta_2026["regions"]["regions"]:
+        _deg = _r["deg"]["fp"][3]  # бюллетени, выданные в ДЭГ (строка 4 протокола)
+        if _deg == 0:
+            continue
+        _paper = _r["proto"][2] + _r["proto"][3] + _r["proto"][4]
+        _rows.append({
+            "Регион": _r["name"], "Бюллетеней в ДЭГ": _deg, "Бюллетеней на участках": _paper,
+            "Доля ДЭГ, %": round(100 * _deg / (_deg + _paper), 1),
+            "ЕР на участках, %": round(100 * _r["fed"][ER_INDEX] / (_r["proto"][8] + _r["proto"][9]), 1),
+            "ЕР в ДЭГ, %": round(100 * _r["deg"]["f"][ER_INDEX] / (_r["deg"]["fp"][8] + _r["deg"]["fp"][9]), 1),
+        })
+    deg_table = pd.DataFrame(_rows).sort_values("Доля ДЭГ, %", ascending=False, ignore_index=True)
+    return (deg_table,)
+
+
+@app.cell
+def fig_deg(C_OLD, deg_table, mo, np, plt):
+    def _fig_deg():
+        t = deg_table.iloc[::-1]
+        y = np.arange(len(t))
+        fig, (a1, a2) = plt.subplots(1, 2, figsize=(11, 0.28 * len(t) + 1.5), sharey=True, layout="constrained")
+        a1.barh(y, t["Доля ДЭГ, %"], color="#5B84D6")
+        for yi, v in zip(y, t["Доля ДЭГ, %"]):
+            a1.text(v + 1, yi, f"{v:.0f}%", va="center", fontsize=8)
+        a1.set_yticks(y, t["Регион"], fontsize=8)
+        a1.set_title("Доля ДЭГ среди выданных бюллетеней", loc="left", fontweight="bold")
+        a1.set_xlim(0, 100)
+        a2.hlines(y, t["ЕР на участках, %"], t["ЕР в ДЭГ, %"], color="#BBBBBB", lw=2)
+        a2.scatter(t["ЕР на участках, %"], y, color=C_OLD, s=18, label="на участках", zorder=3)
+        a2.scatter(t["ЕР в ДЭГ, %"], y, color="#5B84D6", s=18, label="в ДЭГ", zorder=3)
+        a2.set_title("Результат «Единой России», %", loc="left", fontweight="bold")
+        a2.legend(frameon=False, loc="lower right")
+        a2.set_xlim(0, 100)
+        return fig
+
+
+    mo.vstack([_fig_deg(), mo.accordion({"Таблица по регионам": mo.ui.table(deg_table, selection=None)})])
+    return
+
+
+@app.cell(hide_code=True)
+def regions_overview_md(MIN_UIKS, mo, region_overview):
+    def _names(t):
+        return ", ".join(f"{r['Регион'].replace('город ', '')} ({r['Δ ЕР, п.п.']:+.0f})" for _, r in t.iterrows())
+
+
+    _up = region_overview.nlargest(5, "Δ ЕР, п.п.")
+    _down = region_overview.nsmallest(5, "Δ ЕР, п.п.")
+    _corr = region_overview["ЕР, % 2021"].corr(region_overview["Δ ЕР, п.п."])
+    mo.md(
+        f"""
+    ## 3. Регионы
+
+    Явка и результат «Единой России» по регионам на участках, 2026 против 2021. ДЭГ здесь не учтён,
+    поэтому в регионах, где многие голосовали электронно (прежде всего Москва), явка на участках низкая.
+    Регионы, где опубликованы протоколы меньше чем {MIN_UIKS} УИКов, не показаны.
+
+    Результат ЕР вырос в {(region_overview["Δ ЕР, п.п."] > 0).sum()} регионах из {len(region_overview)}. Сильнее всего —
+    там, где в 2021 году он был низким: {_names(_up)}. Снизился он в основном в национальных республиках
+    с традиционно высокими цифрами: {_names(_down)}. Регионы «выравниваются»: корреляция между результатом 2021 года
+    и его изменением — {_corr:.2f}.
+    """
+    )
+    return
+
+
+@app.cell
+def region_overview(elections, pd):
+    MIN_UIKS = 20  # регионы, где опубликованы протоколы лишь единичных УИКов, не сравниваем
+
+
+    def _region_agg(d):
+        g = d.groupby("region").agg(n=("uik", "size"), voters=("voters", "sum"), given=("given", "sum"),
+                                    received=("received", "sum"), leader=("leader", "sum"))
+        return pd.DataFrame({"УИКов": g["n"], "Избирателей": g["voters"],
+                             "Явка, %": 100 * g["given"] / g["voters"], "ЕР, %": 100 * g["leader"] / g["received"]})
+
+
+    region_overview = (
+        _region_agg(elections[2026]).join(_region_agg(elections[2021]), lsuffix=" 2026", rsuffix=" 2021", how="inner")
+        .assign(**{"Δ явки, п.п.": lambda t: t["Явка, % 2026"] - t["Явка, % 2021"],
+                   "Δ ЕР, п.п.": lambda t: t["ЕР, % 2026"] - t["ЕР, % 2021"]})
+        .round(1).rename_axis("Регион").reset_index()
+        [["Регион", "УИКов 2026", "Явка, % 2021", "Явка, % 2026", "Δ явки, п.п.", "ЕР, % 2021", "ЕР, % 2026", "Δ ЕР, п.п."]]
+        .query("`УИКов 2026` >= @MIN_UIKS")
+        .sort_values("Δ ЕР, п.п.", ascending=False, ignore_index=True)
+    )
+    return MIN_UIKS, region_overview
+
+
+@app.cell
+def fig_region_shift(mo, plt, region_overview):
+    def _fig_region_shift():
+        t = region_overview
+        fig, ax = plt.subplots(figsize=(11, 7), layout="constrained")
+        ax.plot([0, 100], [0, 100], color="#999999", lw=1, ls="--")
+        sc = ax.scatter(t["ЕР, % 2021"], t["ЕР, % 2026"], s=t["УИКов 2026"] / 8, c=t["Δ ЕР, п.п."],
+                        cmap="RdBu_r", vmin=-30, vmax=30, edgecolor="k", linewidth=0.4, alpha=0.85)
+        label = set(t.nlargest(3, "Δ ЕР, п.п.")["Регион"]) | set(t.nsmallest(3, "Δ ЕР, п.п.")["Регион"]) | {
+            "город Москва", "город Санкт-Петербург", "Чеченская Республика", "Республика Татарстан (Татарстан)"}
+        for _, r in t[t["Регион"].isin(label)].iterrows():
+            ax.annotate(r["Регион"].replace("город ", "").replace("Республика ", "Респ. "),
+                        (r["ЕР, % 2021"], r["ЕР, % 2026"]), textcoords="offset points", xytext=(6, 4), fontsize=8)
+        fig.colorbar(sc, ax=ax, label="Изменение результата ЕР, п.п.", shrink=0.6)
+        ax.set_xlim(15, 100)
+        ax.set_ylim(15, 101)
+        ax.set_xlabel("ЕР на участках в 2021, %")
+        ax.set_ylabel("ЕР на участках в 2026, %")
+        ax.set_title("Результат «Единой России» по регионам: 2021 → 2026 (размер точки — число УИКов)",
+                     loc="left", fontweight="bold")
+        return fig
+
+
+    mo.vstack([_fig_region_shift(), mo.ui.table(region_overview, selection=None, page_size=10,
+                                                label="Все регионы (сортировка по клику на заголовок)")])
+    return
+
+
+@app.cell(hide_code=True)
+def region_explorer_controls(elections, mo):
+    region_picker = mo.ui.dropdown(
+        sorted(set(elections[2026]["region"]) & set(elections[2021]["region"])),
+        value="город Санкт-Петербург", searchable=True, label="Регион",
+    )
+    mo.vstack([mo.md("### Посмотреть на регион поближе\\nКаждая точка — участок; серым — вся страна."), region_picker])
+    return (region_picker,)
+
+
+@app.cell
+def fig_region_explorer(
+    C_NEW,
+    C_OLD,
+    comet_axes,
+    elections,
+    jittered,
+    plt,
+    region_picker,
+):
+    def _fig_region(region):
+        fig, axes = plt.subplots(1, 2, figsize=(11, 5.6), layout="constrained")
+        for ax, year in zip(axes, [2021, 2026]):
+            d = jittered(elections[year])
+            r = d[d["region"] == region]
+            ax.scatter(d["x"], d["y"], s=0.3, c="#D5D5D5", linewidths=0, rasterized=True)
+            ax.scatter(r["x"], r["y"], s=4, c=C_NEW if year == 2026 else C_OLD, linewidths=0)
+            er = 100 * r["leader"].sum() / r["received"].sum()
+            tu = 100 * r["given"].sum() / r["voters"].sum()
+            comet_axes(ax, f"{year}: {len(r)} УИКов, явка {tu:.1f}%, ЕР {er:.1f}%")
+        fig.suptitle(region, x=0.01, ha="left", fontsize=14, fontweight="bold")
+        return fig
+
+
+    _fig_region(region_picker.value)
+    return
+
+
+@app.cell(hide_code=True)
+def anomalies_md(mo):
+    mo.md(r"""
+    ---
+    # Часть II. Как распределены голоса по участкам
+
+    Официальный итог — это сумма по почти 90 тысячам участков. Если посмотреть на сами участки,
+    видно то, что сумма скрывает. На честных выборах участки образуют компактное облако: явка и
+    результат меняются от места к месту, но без жёсткой связи. Два типичных следа фальсификаций:
+
+    * **вбросы и «карусели»** — на участке одновременно растут явка и результат лидера, облако вытягивается
+      в «хвост кометы» вправо-вверх;
+    * **переписывание протоколов** — итоги подгоняют под «красивые» круглые проценты, и в распределении
+      появляются пики на целых значениях.
+
+    Статистическая аномалия — не доказательство фальсификации на конкретном участке, но массовые
+    аномалии не возникают сами собой. Ниже — сводка по всем федеральным выборам с 2000 года (только бумажные УИКи).
+    """)
+    return
+
+
+@app.cell
+def summary(LEADER_NAME, PRESIDENTIAL, elections, pd):
+    def _row(y, d):
+        return {
+            "Год": y,
+            "Выборы": "президент" if y in PRESIDENTIAL else "Госдума",
+            "Лидер": LEADER_NAME.get(y, "Единая Россия"),
+            "УИКов": len(d),
+            "Избирателей": int(d["voters"].sum()),
+            "Явка, %": round(100 * d["given"].sum() / d["voters"].sum(), 2),
+            "Результат лидера, %": round(100 * d["leader"].sum() / d["received"].sum(), 2),
+        }
+
+
+    summary_table = pd.DataFrame([_row(y, d) for y, d in elections.items()])
+    summary_table
+    return (summary_table,)
+
+
 @app.cell(hide_code=True)
 def fig1_md(mo):
     mo.md(r"""
-    ## 1. Общая картина: «хвост» стал «телом»
+    ## 4. Общая картина: «хвост» стал «телом»
 
     Каждая точка — один УИК: по горизонтали явка, по вертикали результат «Единой России».
     В 2021 году основная масса участков — плотное «ядро» около 35–40% явки и ~30% за ЕР, плюс «хвост кометы»
@@ -341,17 +684,16 @@ def core_md(core_table, mo):
         f"""
     ### Где находится «ядро» кометы
 
-    Положение ядра — максимум сглаженной плотности УИКов на плоскости «явка × результат»
-    (сетка 1 п.п., гауссово сглаживание σ = 2 п.п.; сгусток у 100%/100% исключён из поиска).
-    Для 2003–2021 годов эти оценки совпадают с грубыми оценками ядра в
-    [`dkobak/elections`](https://github.com/dkobak/elections/blob/master/analysis/2021/duma2021.ipynb).
+    Ядро — область, где сосредоточено больше всего участков (максимум сглаженной плотности УИКов на
+    плоскости «явка × результат», сетка 1 п.п., сглаживание σ = 2 п.п.; сгусток у 100%/100% исключён).
+    Если считать участки в ядре наименее затронутыми аномалиями, их результат — ориентир для «чистого» результата.
 
-    «Медуза» пишет, что ядро поднялось с ~30% до ~35%. По нашим данным — с
-    **{_c.loc[2021, "Ядро: ЕР, %"]}%** до **{_c.loc[2026, "Ядро: ЕР, %"]}%**
-    (при σ от 1 до 4 п.п.: {_c.loc[2021, "Ядро: ЕР при σ=1…4"]}% → {_c.loc[2026, "Ядро: ЕР при σ=1…4"]}%).
-    Направление то же, но сдвиг скорее ~3 п.п., чем ~5. Разрыв между официальным результатом
-    по «бумажным» УИКам и ядром при этом вырос с {_c.loc[2021, "Официально − ядро, п.п."]} до {_c.loc[2026, "Официально − ядро, п.п."]} п.п. —
-    максимум за все думские выборы.
+    В 2021 году ядро было на уровне **{_c.loc[2021, "Ядро: ЕР, %"]}%** за «Единую Россию», в 2026-м —
+    **{_c.loc[2026, "Ядро: ЕР, %"]}%** (при σ от 1 до 4 п.п.: {_c.loc[2026, "Ядро: ЕР при σ=1…4"]}%). То есть
+    в ядре поддержка партии выросла лишь на ~3 п.п., а официальный результат по участкам — на
+    {_c.loc[2026, "Официально (бумага), %"] - _c.loc[2021, "Официально (бумага), %"]:.1f} п.п.
+    Разрыв между официальным результатом и ядром вырос с {_c.loc[2021, "Официально − ядро, п.п."]} до
+    **{_c.loc[2026, "Официально − ядро, п.п."]} п.п.** — это максимум за все думские выборы.
     """
     )
     return
@@ -360,7 +702,7 @@ def core_md(core_table, mo):
 @app.cell(hide_code=True)
 def regions_md(mo):
     mo.md(r"""
-    ## 2. Картина по регионам: «московский столб»
+    ## 5. Картина по регионам: «московский столб»
 
     Слева от основного кластера в 2026 году появился разреженный вертикальный «столб» — это бумажные участки Москвы.
     Сдвиг влево объясняется ДЭГ: большинство москвичей голосовали дистанционно, и на участки пришли немногие.
@@ -399,12 +741,12 @@ def fig_regions(comet_axes, elections, jittered, plt):
 
 
 @app.cell
-def region_tables(REGION_GROUPS, elections, meta_2026, mo, pd):
+def region_tables(REGION_GROUPS, elections, mo, pd):
     def _region_stats(year, names):
         d = elections[year]
         d = d[d["region"].isin(names)]
         return {"УИКов": len(d),
-                "Явка, %": round(100 * d["given"].sum() / d["voters"].sum(), 1),
+                "Явка на участках, %": round(100 * d["given"].sum() / d["voters"].sum(), 1),
                 "ЕР, %": round(100 * d["leader"].sum() / d["received"].sum(), 1),
                 "Разброс ЕР по УИКам (IQR), п.п.": round(d["result"].quantile(0.75) - d["result"].quantile(0.25), 1)}
 
@@ -413,31 +755,14 @@ def region_tables(REGION_GROUPS, elections, meta_2026, mo, pd):
         {"Регион": label, "Год": year, **_region_stats(year, names)}
         for label, (names, _) in REGION_GROUPS.items() for year in (2021, 2026)
     ])
-
-    # Доля ДЭГ среди всех выданных бюллетеней (ЦИК публикует ДЭГ только по одномандатным округам)
-    _rows = []
-    for _r in meta_2026["regions"]["regions"]:
-        _deg = _r["deg"]["fp"][3]  # бюллетени, выданные в ДЭГ (строка 4 протокола)
-        if _deg > 0:
-            _paper = _r["proto"][2] + _r["proto"][3] + _r["proto"][4]
-            _rows.append({"Регион": _r["name"], "ДЭГ": _deg, "Бумага": _paper,
-                          "Доля ДЭГ, %": round(100 * _deg / (_deg + _paper), 1)})
-    deg_table = pd.DataFrame(_rows).sort_values("Доля ДЭГ, %", ascending=False, ignore_index=True)
-    moscow_deg_share = deg_table.set_index("Регион").loc["город Москва", "Доля ДЭГ, %"]
-
-    mo.vstack([
-        mo.md(f"**Москва: {moscow_deg_share}%** проголосовавших выбрали ДЭГ (у «Медузы» — «почти 78%»)."),
-        mo.hstack([mo.ui.table(region_table, selection=None, label="Регионы 2021 vs 2026"),
-                   mo.ui.table(deg_table, selection=None, label="Доля ДЭГ по регионам, 2026")],
-                  widths="equal"),
-    ])
-    return moscow_deg_share, region_table
+    mo.ui.table(region_table, selection=None)
+    return (region_table,)
 
 
 @app.cell(hide_code=True)
 def history_md(mo):
     mo.md(r"""
-    ## 3. Динамика по годам: хуже на думских выборах при Путине ещё не было
+    ## 6. Динамика по годам: хуже на думских выборах при Путине ещё не было
 
     Плотность голосов на плоскости «явка × результат ЕР» на шести думских выборах.
     Близкое к нормальному распределение 2003 года сначала превращается в «комету» с ядром и хвостом,
@@ -498,7 +823,7 @@ def fig_history(
 @app.cell(hide_code=True)
 def peaks_md(mo):
     mo.md(r"""
-    ## 4. Пики на «красивых» значениях: их стало намного больше
+    ## 7. Пики на «красивых» значениях: их стало намного больше
 
     Гистограмма УИКов по явке и по результату ЕР с шагом 0.1 п.п. (к числителю добавлен шум U(−0.5, 0.5),
     чтобы убрать артефакты деления на малых участках — как у Кобака и соавторов). При честном подсчёте
@@ -558,17 +883,14 @@ def fig_peaks_2003(fig_peaks, mo):
 @app.cell(hide_code=True)
 def mc_md(mo):
     mo.md(r"""
-    ## 5. Сколько УИКов с аномально круглыми значениями
+    ## 8. Сколько УИКов с аномально круглыми значениями
 
     Методика [Кобака, Шпилькина и Пшеничникова](https://rss.onlinelibrary.wiley.com/doi/full/10.1111/j.1740-9713.2018.01141.x):
     считаем УИКи, у которых явка **или** результат лидера лежит в пределах ±0.05 п.п. от целого процента,
-    и вычитаем ожидаемое число таких УИКов при честном подсчёте. Ожидание получаем Монте-Карло: для каждого
-    участка голоса за лидера и выданные бюллетени 1000 раз разыгрываются из биномиального распределения с теми же
-    параметрами. «Порог случайных пиков» — 99.9-й перцентиль случайного превышения.
-
-    Для 2026 года считаем два варианта явки: по **выданным** бюллетеням (строки 3+4+5 протокола — так явка определена
-    во всех остальных годах) и по бюллетеням, **найденным в ящиках** (строки 9+10). Второй вариант, судя по всему,
-    использован в расчёте «Медузы»/Кобака: колонка `turnout` в CSV-выгрузке 2026 года содержит именно его.
+    и вычитаем ожидаемое число таких УИКов при честном подсчёте. Ожидание получаем методом Монте-Карло:
+    для каждого участка голоса за лидера и выданные бюллетени 1000 раз разыгрываются из биномиального
+    распределения с теми же параметрами. «Порог случайных пиков» — 99.9-й перцентиль случайного превышения:
+    всё, что выше, случайностью объяснить нельзя.
     """)
     return
 
@@ -637,14 +959,11 @@ def mc_run(
         return cache[fp]
 
 
-    _variants = [(y, str(y), elections[y]) for y in ALL_YEARS] + [
-        (2026, "2026*", elections[2026].assign(given=elections[2026]["received"]))
-    ]
     _rows = []
-    for _y, _label, _df in mo.status.progress_bar(_variants, title="Монте-Карло по выборам"):
-        _a = _cached_anomaly(_label, _df)
+    for _y in mo.status.progress_bar(ALL_YEARS, title="Монте-Карло по выборам"):
+        _a = _cached_anomaly(str(_y), elections[_y])
         _rows.append({
-            "Год": _label, "Выборы": "президент" if _y in PRESIDENTIAL else "Госдума", "УИКов в тесте": _a["n"],
+            "Год": _y, "Выборы": "президент" if _y in PRESIDENTIAL else "Госдума", "УИКов в тесте": _a["n"],
             "Избыток: явка или результат": round(_a["excess"][0], 1),
             "Избыток: только явка": round(_a["excess"][2], 1),
             "Избыток: только результат": round(_a["excess"][1], 1),
@@ -657,10 +976,9 @@ def mc_run(
 
 
 @app.cell
-def fig_integer(C_NEW, PRESIDENTIAL, integer_table, np, plt):
+def fig_integer(PRESIDENTIAL, integer_table, np, plt):
     def _fig_integer():
-        t = integer_table[integer_table["Год"] != "2026*"]
-        alt26 = integer_table.set_index("Год").loc["2026*"]
+        t = integer_table
         x = np.arange(len(t))
         fig, ax = plt.subplots(figsize=(11, 5), layout="constrained")
         ax.plot(x, t["Избыток: явка или результат"], "-o", color="k", lw=2, mfc="w", mew=1.5,
@@ -668,11 +986,9 @@ def fig_integer(C_NEW, PRESIDENTIAL, integer_table, np, plt):
         ax.plot(x, t["Избыток: только явка"], "-o", color="#5B84D6", lw=1.2, ms=4, label="Только явка")
         ax.plot(x, t["Избыток: только результат"], "-o", color="#D9725B", lw=1.2, ms=4, label="Только результат")
         ax.plot(x, t["Порог случайных пиков"], "--", color="#999999", lw=1.2, label="Порог случайных пиков (99.9%)")
-        ax.plot(x[-1], alt26["Избыток: явка или результат"], "D", color=C_NEW, ms=7,
-                label="2026, явка по бюллетеням в ящиках")
         for xi, v in zip(x, t["Избыток: явка или результат"]):
             ax.annotate(f"{v:.0f}", (xi, v), textcoords="offset points", xytext=(0, 8), ha="center", fontsize=8)
-        ax.set_xticks(x, [f"{y}\n{'П' if int(y) in PRESIDENTIAL else 'Д'}" for y in t["Год"]])
+        ax.set_xticks(x, [f"{y}\n{'П' if y in PRESIDENTIAL else 'Д'}" for y in t["Год"]])
         ax.set_ylabel("Избыток УИКов с «красивыми» значениями")
         ax.legend(frameon=False, loc="upper left")
         ax.set_title("Количество УИКов с «красивыми» значениями на парламентских (Д) и президентских (П) выборах",
@@ -684,81 +1000,45 @@ def fig_integer(C_NEW, PRESIDENTIAL, integer_table, np, plt):
     return
 
 
-@app.cell
-def reference_check(integer_table, io, mo, pd, requests):
-    # Сверка с опубликованными цифрами (не используются в расчётах выше):
-    # данные графика «Медузы» (Datawrapper) и Монте-Карло из репозитория Кобака для 2000–2021
-    try:
-        _meduza = pd.read_csv(io.StringIO(
-            requests.get("https://datawrapper.dwcdn.net/raAug/1/dataset.csv", timeout=30).text))
-    except requests.RequestException:
-        _meduza = None
-    mo.stop(_meduza is None, mo.md("_Сверка пропущена: не удалось скачать данные графика «Медузы» с Datawrapper._"))
-    _meduza = _meduza.rename(columns={"Явка или результат лидера": "Медуза: избыток",
-                                      "Порог случайных пиков": "Медуза: порог"})[["Год", "Медуза: избыток", "Медуза: порог"]]
-    _ours = integer_table[integer_table["Год"] != "2026*"].assign(Год=lambda t: t["Год"].astype(int))
-    reference_check = _ours[["Год", "УИКов в тесте", "Избыток: явка или результат", "Порог случайных пиков"]].merge(
-        _meduza, on="Год", how="left")
-    reference_check["Разница с «Медузой»"] = (reference_check["Избыток: явка или результат"] - reference_check["Медуза: избыток"]).round(1)
-    mo.vstack([
-        mo.md(f"""**Сверка.** Для 2000–2024 годов наш избыток совпадает с опубликованным с точностью до шума
-    Монте-Карло. Для 2026 года «Медуза» даёт {_meduza.set_index("Год").loc[2026, "Медуза: избыток"]:.0f};
-    у нас — {integer_table.set_index("Год").loc["2026*", "Избыток: явка или результат"]:.0f} при явке по бюллетеням
-    в ящиках (как у них) и {integer_table.set_index("Год").loc["2026", "Избыток: явка или результат"]:.0f}
-    при явке по выданным бюллетеням. Порог случайных пиков — 99.9-й перцентиль по 1000 симуляциям, т.е. практически
-    максимум, поэтому он шумный от прогона к прогону."""),
-        reference_check,
-    ])
-    return
-
-
 @app.cell(hide_code=True)
 def conclusions(
     core_table,
-    elections,
+    deg_table,
     integer_table,
     mo,
-    moscow_deg_share,
-    pd,
+    parties,
     region_table,
+    turnout,
 ):
     _c = core_table.set_index("Год")
     _i = integer_table.set_index("Год")
+    _p = {y: parties[y].set_index("Партия")["%"] for y in (2021, 2026)}
+    _duma = _i[_i["Выборы"] == "Госдума"]["Избыток: явка или результат"]
     _r = region_table.set_index(["Регион", "Год"])
-    conclusions = pd.DataFrame([
-        ("УИКов с протоколами (2026)", "82 124 (затем 88 113)", f"{len(elections[2026]):,}".replace(",", " ")),
-        ("Ядро кометы, результат ЕР 2021 → 2026", "~30% → ~35%", f"{_c.loc[2021, 'Ядро: ЕР, %']}% → {_c.loc[2026, 'Ядро: ЕР, %']}%"),
-        ("Москва: доля ДЭГ", "почти 78%", f"{moscow_deg_share}%"),
-        ("Москва: явка на участках 2021 → 2026", "сдвиг влево («столб»)",
-         f"{_r.loc[('Москва', 2021), 'Явка, %']}% → {_r.loc[('Москва', 2026), 'Явка, %']}%"),
-        ("Петербург: явка / ЕР 2021 → 2026", "примерно вдвое выше",
-         f"{_r.loc[('Санкт-Петербург', 2021), 'Явка, %']}/{_r.loc[('Санкт-Петербург', 2021), 'ЕР, %']}% → "
-         f"{_r.loc[('Санкт-Петербург', 2026), 'Явка, %']}/{_r.loc[('Санкт-Петербург', 2026), 'ЕР, %']}%"),
-        ("Чечня 2021 → 2026", "без изменений",
-         f"{_r.loc[('Чеченская республика', 2021), 'Явка, %']}/{_r.loc[('Чеченская республика', 2021), 'ЕР, %']}% → "
-         f"{_r.loc[('Чеченская республика', 2026), 'Явка, %']}/{_r.loc[('Чеченская республика', 2026), 'ЕР, %']}%"),
-        ("Избыток «красивых» УИКов 2021", "~1 300", f"{_i.loc['2021', 'Избыток: явка или результат']:.0f}"),
-        ("Избыток «красивых» УИКов 2026", "почти 2 250",
-         f"{_i.loc['2026*', 'Избыток: явка или результат']:.0f} (явка по ящикам) / "
-         f"{_i.loc['2026', 'Избыток: явка или результат']:.0f} (по выданным)"),
-    ], columns=["Утверждение", "«Медуза»", "Наш расчёт"])
+    mo.md(
+        f"""
+    ---
+    ## Выводы
 
-    mo.vstack([
-        mo.md(r"""
-    ## Итог: что воспроизвелось
+    1. **«Единая Россия» получила {_p[2026]["Единая Россия"]:.1f}%** против {_p[2021]["Единая Россия"]:.1f}% в 2021 году,
+       КПРФ — {_p[2026]["КПРФ"]:.1f}% (было {_p[2021]["КПРФ"]:.1f}%). Явка с учётом ДЭГ — {turnout[2026]["явка"]:.1f}%.
+    2. **Электронное голосование стало массовым**: через ДЭГ проголосовали {turnout[2026]["доля ДЭГ"]:.1f}% пришедших,
+       в Москве — {deg_table.set_index("Регион").loc["город Москва", "Доля ДЭГ, %"]}%. Бумажные участки Москвы превратились
+       в вертикальный «столб» с явкой около {_r.loc[("Москва", 2026), "Явка на участках, %"]}% и огромным разбросом результата.
+    3. **«Хвост кометы» стал «телом»**: ядро участков сдвинулось лишь до {_c.loc[2026, "Ядро: ЕР, %"]}% за ЕР, а разрыв между
+       официальным результатом и ядром вырос до {_c.loc[2026, "Официально − ядро, п.п."]} п.п. — больше, чем на любых
+       предыдущих думских выборах.
+    4. **Круглых процентов стало вдвое больше**: избыток УИКов с «красивыми» значениями — {_i.loc[2026, "Избыток: явка или результат"]:.0f}
+       против {_i.loc[2021, "Избыток: явка или результат"]:.0f} в 2021 году. Это рекорд для думских выборов (прежний —
+       {_duma.drop(2026).max():.0f} в {_duma.drop(2026).idxmax()} году); больше было только на президентских выборах 2024 года
+       ({_i.loc[2024, "Избыток: явка или результат"]:.0f}).
+    5. **Петербург** резко сменил профиль: явка на участках {_r.loc[("Санкт-Петербург", 2021), "Явка на участках, %"]}% → {_r.loc[("Санкт-Петербург", 2026), "Явка на участках, %"]}%,
+       ЕР {_r.loc[("Санкт-Петербург", 2021), "ЕР, %"]}% → {_r.loc[("Санкт-Петербург", 2026), "ЕР, %"]}%. **Чечня** — почти без изменений
+       (ЕР {_r.loc[("Чеченская республика", 2021), "ЕР, %"]}% → {_r.loc[("Чеченская республика", 2026), "ЕР, %"]}%).
 
-    Все ключевые выводы статьи подтверждаются расчётом по сырым протоколам. Числа по прошлым выборам
-    совпадают с опубликованными с точностью до шума Монте-Карло. Два расхождения:
-
-    * **Ядро 2026 года** по нашей оценке ниже (~32–33%, а не ~35%), так что рост «истинного» результата ЕР
-      с 2021 года — скорее ~3 п.п., чем ~5.
-    * **Избыток «красивых» УИКов в 2026 году** зависит от определения явки. Если считать её по бюллетеням
-      в ящиках (как, судя по всему, в расчёте «Медузы»), выходит ~2 235, как в статье. Если по выданным
-      бюллетеням (как во всех прошлых годах), выходит ~2 430. Тогда 2026 год ещё сильнее отрывается
-      от прежних думских выборов.
-    """),
-        conclusions,
-    ])
+    По совокупности признаков это самые аномальные думские выборы за всё время наблюдений.
+    """
+    )
     return
 
 
