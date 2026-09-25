@@ -1047,21 +1047,23 @@ def game_intro(mo):
     # Часть III. Игра: сфальсифицируй выборы и останься незаметным
 
     Вы — председатель территориальной избирательной комиссии небольшого города. Администрация
-    спустила задание: обеспечить нужную явку и результат «Единой России». В вашем распоряжении
-    12 участков. Избиратели голосуют как голосуют, а исправлять итоги придётся вам.
+    спустила задание: обеспечить нужную явку и результат «Единой России» — и выделила на это бюджет.
+    В вашем распоряжении 12 участков. Избиратели голосуют как голосуют, а исправлять итоги придётся вам.
 
-    **Тактики** (на каждом участке можно выбрать свою):
+    | Метод | Что происходит | Цена |
+    |---|---|---|
+    | 🏢 **Мобилизация** | бюджетников и работников предприятий приводят на участок под контролем; голосуют почти все «как надо» | 0.5 тыс. ₽ за человека, до 8% списка |
+    | 🎠 **Карусель** | одни и те же люди голосуют на участке несколько раз | 1 тыс. ₽ за голос, до 150 на участок |
+    | 🗳 **Вброс** | пачка бюллетеней за ЕР в урну — например, ночью, пока бюллетени лежат в комиссии | сговор с комиссией 150 тыс. ₽ + 0.1 тыс. за бюллетень |
+    | 🔀 **Перекладка** | при подсчёте часть бюллетеней других партий кладут в стопку ЕР | сговор с комиссией 150 тыс. ₽ (один на вброс и перекладку) |
+    | ✍️ **Переписать протокол** | в ТИК протокол рисуют с нуля: любые проценты явки и ЕР | 300 тыс. ₽ за участок |
+    | 🚓 **Убрать наблюдателя** | на трёх участках есть независимые наблюдатели 👁 | 200 тыс. ₽ |
 
-    * 🗳 **Вброс** — добавить пачку бюллетеней за ЕР. Растут и явка, и результат: участок уезжает
-      вправо-вверх, в «хвост кометы».
-    * 🔀 **Перекладка** — переложить часть голосов других партий в стопку ЕР. Явка та же, растёт только результат.
-    * ✍️ **Переписать протокол** — просто вписать нужные проценты явки и результата. Полный контроль над цифрами…
-      если вы умеете придумывать правдоподобные числа.
-
-    Вброс и перекладку можно сочетать; переписанный протокол заменяет всё остальное.
+    Мобилизация, карусель, вброс и перекладка складываются; переписанный протокол заменяет всё остальное.
+    Подделка на участке с наблюдателем без его удаления закончится актом о нарушении.
 
     Когда закончите — сдайте протоколы. Их проверит аналитик теми же методами, что в Части II:
-    сравнит ваш город с соседними, поищет круглые проценты, выбросы и слишком гладкие цифры.
+    сравнит ваш город с соседними, поищет круглые проценты, выбросы и участки, нарисованные «под линейку».
     Игра навеяна [экспериментом с монеткой Винсента Вармердама](https://www.youtube.com/watch?v=IrlNG-jmzx8):
     люди, которые пытаются выдумать «случайные» броски, почти всегда выдают себя.
     """)
@@ -1071,12 +1073,34 @@ def game_intro(mo):
 @app.cell
 def game_model(core_table, elections, np):
     GAME_UIKS = 12
-    GAME_LEVELS = {
-        "Скромное: ЕР ≥ 40%, явка ≥ 42%": (40, 42),
-        "Обычное: ЕР ≥ 50%, явка ≥ 50%": (50, 50),
-        "Как надо: ЕР ≥ 65%, явка ≥ 65%": (65, 65),
-        "Образцовое: ЕР ≥ 90%, явка ≥ 90%": (90, 90),
+    GAME_LEVELS = {  # цель по ЕР, цель по явке, бюджет в тыс. ₽
+        "Скромное: ЕР ≥ 40%, явка ≥ 42%, бюджет 1.5 млн ₽": (40, 42, 1500),
+        "Обычное: ЕР ≥ 50%, явка ≥ 50%, бюджет 3 млн ₽": (50, 50, 3000),
+        "Как надо: ЕР ≥ 65%, явка ≥ 65%, бюджет 4.5 млн ₽": (65, 65, 4500),
+        "Образцовое: ЕР ≥ 90%, явка ≥ 90%, бюджет 6 млн ₽": (90, 90, 6000),
     }
+    GAME_OBSERVERS = 3  # участков с независимыми наблюдателями
+    GAME_PRICES = {  # тыс. ₽
+        "mobilize": 0.5,     # за приведённого избирателя
+        "carousel": 1.0,     # за голос «карусели»
+        "commission": 150,   # сговор с руководством УИК: нужен для вброса и перекладки
+        "stuff": 0.1,        # за вброшенный бюллетень
+        "rewrite": 300,      # переписать протокол в ТИК
+        "observer": 200,     # убрать наблюдателя
+    }
+    MOBILIZED_ER_SHARE = 0.85  # приведённые под контролем голосуют в основном «как надо»
+
+
+    def fraud_cost(c, voters):
+        """Стоимость выбранных методов на одном участке, тыс. ₽."""
+        if c["rewrite"]:
+            cost = GAME_PRICES["rewrite"]
+        else:
+            cost = (round(voters * c["mobilize"] / 100) * GAME_PRICES["mobilize"]
+                    + c["carousel"] * GAME_PRICES["carousel"]
+                    + (GAME_PRICES["commission"] if c["stuff"] or c["shift"] else 0)
+                    + c["stuff"] * GAME_PRICES["stuff"])
+        return cost + (GAME_PRICES["observer"] if c["remove_observer"] else 0)
     TOWN_NAMES = ["Верхнеключевск", "Нижнеозёрск", "Красноборск", "Светлогорье", "Приреченск",
                   "Каменск-Северный", "Заречный", "Новодольск", "Сосновоборск", "Белоярск"]
     # размеры участков берём из реальных УИКов 2026 года; уровень явки и поддержки ЕР — из «ядра» 2026 года
@@ -1107,9 +1131,12 @@ def game_model(core_table, elections, np):
 
     return (
         GAME_LEVELS,
+        GAME_OBSERVERS,
         GAME_SIZES,
         GAME_UIKS,
+        MOBILIZED_ER_SHARE,
         TOWN_NAMES,
+        fraud_cost,
         simulate_towns,
         with_percentages,
     )
@@ -1117,7 +1144,7 @@ def game_model(core_table, elections, np):
 
 @app.cell(hide_code=True)
 def game_setup(GAME_LEVELS, mo):
-    game_level = mo.ui.dropdown(list(GAME_LEVELS), value="Обычное: ЕР ≥ 50%, явка ≥ 50%", label="Задание")
+    game_level = mo.ui.dropdown(list(GAME_LEVELS), value="Обычное: ЕР ≥ 50%, явка ≥ 50%, бюджет 3 млн ₽", label="Задание")
     game_new = mo.ui.button(value=0, on_click=lambda v: v + 1, label="🎲 Другой город")
     mo.hstack([game_level, game_new], justify="start", gap=2)
     return game_level, game_new
@@ -1126,6 +1153,7 @@ def game_setup(GAME_LEVELS, mo):
 @app.cell(hide_code=True)
 def game_world(
     GAME_LEVELS,
+    GAME_OBSERVERS,
     GAME_SIZES,
     GAME_UIKS,
     TOWN_NAMES,
@@ -1145,7 +1173,8 @@ def game_world(
     game_town.insert(0, "УИК", [f"№{n}" for n in np.sort(_rng.choice(np.arange(1101, 1400), GAME_UIKS, replace=False))])
     game_region = with_percentages(pd.DataFrame({k: v[1:].ravel() for k, v in _sim.items()})).assign(
         town=np.repeat(np.arange(30), GAME_UIKS))  # 30 соседних городов, голосуют честно
-    game_target_result, game_target_turnout = GAME_LEVELS[game_level.value]
+    game_observers = {int(i) for i in _rng.choice(GAME_UIKS, GAME_OBSERVERS, replace=False)}
+    game_target_result, game_target_turnout, game_budget = GAME_LEVELS[game_level.value]
 
     mo.md(
         f"""
@@ -1153,11 +1182,14 @@ def game_world(
 
     {GAME_UIKS} участков, {game_town["voters"].sum():,} избирателей. По честному подсчёту ожидается явка
     **{100 * game_town["given"].sum() / game_town["voters"].sum():.1f}%** и **{100 * game_town["leader"].sum() / game_town["received"].sum():.1f}%**
-    за «Единую Россию». Администрация ждёт явку не ниже **{game_target_turnout}%** и результат не ниже **{game_target_result}%**.
+    за «Единую Россию». Администрация ждёт явку не ниже **{game_target_turnout}%** и результат не ниже **{game_target_result}%**
+    и выделяет **{game_budget / 1000:.1f} млн ₽**. На участках {", ".join(game_town["УИК"].iloc[sorted(game_observers)])} работают наблюдатели 👁.
     """.replace(",", " ")
     )
     return (
+        game_budget,
         game_name,
+        game_observers,
         game_region,
         game_target_result,
         game_target_turnout,
@@ -1166,51 +1198,64 @@ def game_world(
 
 
 @app.cell(hide_code=True)
-def game_controls(game_town, mo):
-    def _uik_controls(r):
+def game_controls(game_observers, game_town, mo):
+    def _uik_controls(r, observed):
         return mo.ui.dictionary({
+            "mobilize": mo.ui.slider(0, 8, step=1, value=0, show_value=True, full_width=True),
+            "carousel": mo.ui.slider(0, 150, step=10, value=0, show_value=True, full_width=True),
             "stuff": mo.ui.slider(0, 1000, step=10, value=0, show_value=True, full_width=True),
             "shift": mo.ui.slider(0, 100, step=5, value=0, show_value=True, full_width=True),
             "rewrite": mo.ui.switch(),
             "t": mo.ui.number(start=0, stop=100, step=0.01, value=round(r.turnout, 2), full_width=True),
             "r": mo.ui.number(start=0, stop=100, step=0.01, value=round(r.result, 2), full_width=True),
+            "remove_observer": mo.ui.switch(label="🚓 убрать", disabled=not observed),
         })
 
 
-    game_controls = mo.ui.array([_uik_controls(r) for r in game_town.itertuples()])
+    game_controls = mo.ui.array([_uik_controls(r, i in game_observers) for i, r in enumerate(game_town.itertuples())])
 
-    _widths = [1.6, 2.4, 2.4, 0.9, 1.1, 1.1]
-    _header = mo.hstack([mo.md(f"**{h}**") for h in
-                         ["Участок", "🗳 Вброс, бюллетеней", "🔀 Перекладка, % чужих голосов", "✍️ Переписать",
-                          "Явка в протоколе, %", "ЕР в протоколе, %"]], widths=_widths, gap=1)
-    _rows = [
-        mo.hstack([
-            mo.md(f"**УИК {r.УИК}**<br><span style='opacity:.65;font-size:.85em'>{r.voters} изб. · честно "
-                  f"{r.turnout:.1f}% / {r.result:.1f}%</span>"),
-            game_controls[i]["stuff"], game_controls[i]["shift"], game_controls[i]["rewrite"],
-            game_controls[i]["t"], game_controls[i]["r"],
-        ], widths=_widths, align="center", gap=1)
-        for i, r in enumerate(game_town.itertuples())
-    ]
-    mo.vstack([_header, *_rows,
-               mo.md("<span style='opacity:.65;font-size:.85em'>Поля «в протоколе» работают, только если включено "
-                     "«✍️ Переписать»; тогда вброс и перекладка на этом участке не учитываются.</span>")], gap=0.4)
+
+    def _cell(title, widget):
+        return mo.vstack([mo.md(f"<span style='font-size:.8em;opacity:.7'>{title}</span>"), widget], gap=0)
+
+
+    def _uik_card(i, r):
+        c = game_controls[i]
+        observer = i in game_observers
+        head = mo.md(f"**УИК {r.УИК}** {'👁' if observer else ''}<br>"
+                     f"<span style='opacity:.65;font-size:.85em'>{r.voters} изб. · честно {r.turnout:.1f}% / {r.result:.1f}%</span>")
+        polling = mo.hstack([_cell("🏢 мобилизация, % списка", c["mobilize"]), _cell("🎠 карусель, голосов", c["carousel"]),
+                             _cell("🗳 вброс, бюллетеней", c["stuff"]), _cell("🔀 перекладка, % чужих", c["shift"])],
+                            widths="equal", gap=1)
+        tik = mo.hstack([_cell("✍️ переписать", c["rewrite"]), _cell("явка в протоколе, %", c["t"]),
+                         _cell("ЕР в протоколе, %", c["r"]), _cell("наблюдатель", c["remove_observer"] if observer else mo.md("—"))],
+                        widths=[0.8, 1, 1, 1], gap=1)
+        return mo.hstack([head, mo.vstack([polling, tik], gap=0.3)], widths=[1, 5], align="center", gap=1)
+
+
+    mo.vstack([_uik_card(i, r) for i, r in enumerate(game_town.itertuples())], gap=1.2)
     return (game_controls,)
 
 
 @app.cell(hide_code=True)
 def game_apply(
     GAME_UIKS,
+    MOBILIZED_ER_SHARE,
+    fraud_cost,
+    game_budget,
     game_controls,
+    game_observers,
     game_target_result,
     game_target_turnout,
     game_town,
     mo,
+    np,
     pd,
     with_percentages,
 ):
-    def apply_fraud(town, controls):
-        """Применить выбранные тактики к честным итогам участков."""
+    def apply_fraud(town, controls, seed=0):
+        """Применить выбранные методы к честным итогам участков."""
+        rng = np.random.default_rng(seed)
         out = town.copy()
         for i, c in enumerate(controls):
             voters, given, received, invalid, leader = (int(out.at[i, k]) for k in
@@ -1222,16 +1267,21 @@ def game_apply(
                 leader = min(round(new_received * c["r"] / 100), new_received - invalid)
                 given, received = new_given, new_received
             else:
+                mobilized = round(voters * c["mobilize"] / 100)
+                added = mobilized + c["carousel"] + c["stuff"]
+                leader += rng.binomial(mobilized, MOBILIZED_ER_SHARE) + c["carousel"] + c["stuff"]
+                given, received = given + added, received + added
                 leader += round((received - invalid - leader) * c["shift"] / 100)
-                given, received, leader = given + c["stuff"], received + c["stuff"], leader + c["stuff"]
             out.loc[i, ["given", "received", "invalid", "leader"]] = [given, received, invalid, leader]
         return with_percentages(out)
 
 
     game_result = apply_fraud(game_town, game_controls.value)
+    game_costs = [fraud_cost(c, v) for c, v in zip(game_controls.value, game_town["voters"])]
+    game_spent = sum(game_costs)
     game_turnout = 100 * game_result["given"].sum() / game_result["voters"].sum()
     game_er = 100 * game_result["leader"].sum() / game_result["received"].sum()
-    game_mission_ok = game_turnout >= game_target_turnout and game_er >= game_target_result
+    game_mission_ok = game_turnout >= game_target_turnout and game_er >= game_target_result and game_spent <= game_budget
 
 
     def _progress(label, value, target, honest):
@@ -1241,10 +1291,11 @@ def game_apply(
 
 
     _per_uik = pd.DataFrame({
-        "УИК": game_town["УИК"],
+        "УИК": game_town["УИК"] + [" 👁" if i in game_observers else "" for i in range(GAME_UIKS)],
         "Явка: честно → сдано": [f"{a:.1f}% → {b:.1f}%" for a, b in zip(game_town["turnout"], game_result["turnout"])],
         "ЕР: честно → сдано": [f"{a:.1f}% → {b:.1f}%" for a, b in zip(game_town["result"], game_result["result"])],
         "Голосов ЕР добавлено": game_result["leader"] - game_town["leader"],
+        "Потрачено, тыс. ₽": np.round(game_costs, 1),
     })
 
     mo.vstack([
@@ -1253,13 +1304,15 @@ def game_apply(
                       100 * game_town["given"].sum() / game_town["voters"].sum()),
             _progress("«Единая Россия»", game_er, game_target_result,
                       100 * game_town["leader"].sum() / game_town["received"].sum()),
-            mo.stat(f"{game_result['leader'].sum() - game_town['leader'].sum():+,}".replace(",", " "),
-                    label="Голосов ЕР добавлено", bordered=True),
-            mo.stat("✅ выполнено" if game_mission_ok else "⏳ пока нет", label="Задание", bordered=True),
+            mo.stat(f"{game_spent / 1000:.2f} млн ₽", label="Потрачено", bordered=True,
+                    caption=f"из {game_budget / 1000:.1f} млн · осталось {(game_budget - game_spent) / 1000:.2f}",
+                    direction="increase" if game_spent <= game_budget else "decrease"),
+            mo.stat("✅ выполнено" if game_mission_ok else "🚫 перерасход" if game_spent > game_budget else "⏳ пока нет",
+                    label="Задание", bordered=True),
         ], justify="start", wrap=True),
-        mo.accordion({"Итоги по участкам": mo.ui.table(_per_uik, selection=None, page_size=GAME_UIKS)}),
+        mo.accordion({"Итоги и расходы по участкам": mo.ui.table(_per_uik, selection=None, page_size=GAME_UIKS)}),
     ])
-    return game_er, game_mission_ok, game_result, game_turnout
+    return game_er, game_mission_ok, game_result, game_spent, game_turnout
 
 
 @app.cell(hide_code=True)
@@ -1339,19 +1392,42 @@ def game_detector(np, pd, simulate_towns):
 
 @app.cell(hide_code=True)
 def game_verdict(
+    game_budget,
+    game_controls,
     game_er,
     game_mission_ok,
+    game_observers,
     game_region,
     game_result,
+    game_spent,
     game_submit,
     game_town,
     game_turnout,
     investigate,
     mo,
+    pd,
 ):
     mo.stop(not game_submit.value, mo.md("_Настройте участки и нажмите «Сдать протоколы»._"))
 
-    game_checks, game_score = investigate(game_result, game_region)
+    def _observer_reports(controls):
+        """Что зафиксировали наблюдатели на своих участках."""
+        rows = []
+        for i in sorted(game_observers):
+            c, uik = controls[i], game_town.at[i, "УИК"]
+            commission_fraud = c["rewrite"] or c["stuff"] or c["shift"]
+            if c["remove_observer"]:
+                rows.append((f"наблюдателя на УИК {uik} удалили — жалоба разошлась по соцсетям", 5))
+            elif commission_fraud:
+                rows.append((f"на УИК {uik} наблюдатель составил акт и снял подделку на видео", 25))
+            elif c["carousel"]:
+                rows.append((f"на УИК {uik} наблюдатель заметил «карусель»", 10))
+        return pd.DataFrame([{"Проверка": "Наблюдатели", "Что видит аналитик": text,
+                              "Норма для честного подсчёта": "нарушений нет", "Штраф": points} for text, points in rows])
+
+
+    _stats, _ = investigate(game_result, game_region)
+    game_checks = pd.concat([_stats, _observer_reports(game_controls.value)], ignore_index=True)
+    game_score = int(min(100, game_checks["Штраф"].sum()))
     game_honest_checks, game_honest_score = investigate(game_town, game_region, seed=1)
     game_caught = game_score >= 30
 
@@ -1359,14 +1435,16 @@ def game_verdict(
     _story = {
         (True, False): "Задание выполнено, а статистика ничего не заметила. Редкая удача — попробуйте повторить на другом городе.",
         (True, True): "Администрация довольна, но ваш город светится на графиках аналитиков. Такие цифры видно без всякого суда.",
-        (False, False): "Вы остались незаметны, но задание провалено: до цели не дотянули.",
+        (False, False): ("Вы остались незаметны, но задание провалено: " +
+                         ("бюджет превышен." if game_spent > game_budget else "до цели не дотянули.")),
         (False, True): "Худший исход: задание не выполнено, а следы подделки видны всем.",
     }[(game_mission_ok, game_caught)]
 
     mo.vstack([
         mo.callout(mo.md(f"""## {_verdict} — индекс подозрительности {game_score}/100
 
-    **Задание:** {"✅ выполнено" if game_mission_ok else "❌ не выполнено"} (явка {game_turnout:.1f}%, ЕР {game_er:.1f}%).
+    **Задание:** {"✅ выполнено" if game_mission_ok else "❌ не выполнено"} (явка {game_turnout:.1f}%, ЕР {game_er:.1f}%,
+    потрачено {game_spent / 1000:.2f} из {game_budget / 1000:.1f} млн ₽).
     {_story}"""), kind="success" if not game_caught else "warn" if game_score < 60 else "danger"),
         mo.ui.table(game_checks, selection=None, label="Разбор аналитика"),
         mo.md(f"""**Сравнение со случайностью.** Те же проверки для честного подсчёта в вашем городе дают индекс
@@ -1428,15 +1506,17 @@ def game_epilogue(mo):
     mo.md(r"""
     ### Почему спрятаться почти невозможно
 
-    * **Вброс** тянет явку и результат вверх одновременно — участки вытягиваются в «хвост кометы»,
-      а город отрывается от соседей. Чем больше задание, тем дальше.
-    * **Перекладка** прячется лучше (явка не меняется), но результат всё равно уезжает от соседних городов
-      и от собственных соседних участков.
-    * **Переписанный протокол** выдают сами числа. Придумывая «правдоподобные» проценты, люди тянутся
-      к круглым значениям и делают участки слишком похожими друг на друга — как и в эксперименте
-      с монеткой, где выдуманные серии «орёл/решка» слишком ровные и без длинных повторов.
+    * **Мобилизация и карусель** — живые (или почти живые) голоса, но они всё равно поднимают явку и результат
+      одновременно. Немного — незаметно; много — город отрывается от соседей.
+    * **Вброс** тянет явку и результат вверх вместе — участки вытягиваются в «хвост кометы».
+    * **Перекладка** прячется лучше всего (явка не меняется), но требует сговора со всей комиссией на каждом участке —
+      это дорого, и результат всё равно уезжает от соседних городов.
+    * **Переписанный протокол** выдают сами числа. Придумывая «правдоподобные» проценты, люди тянутся к круглым
+      значениям и рисуют участки «под линейку» — слишком похожими друг на друга. Как в эксперименте с монеткой,
+      где выдуманные серии «орёл/решка» слишком ровные и без длинных повторов.
+    * **Наблюдатели** видят подделку своими глазами, а убрать их — отдельный скандал.
 
-    Скромное задание иногда удаётся выполнить незаметно. «Образцовое» — никогда: именно такие
+    Скромное задание при небольшом бюджете иногда удаётся выполнить незаметно. «Образцовое» — никогда: именно такие
     цифры в реальных данных образуют пики на круглых значениях и хвосты комет из Части II.
     """)
     return
